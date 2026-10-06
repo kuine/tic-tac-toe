@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tic Tac Toe</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Caveat:wght@500;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --paper: #f1f5ef;
+  --grid: #c3d6dc;
+  --text: #22313a;
+  --x: #1d3557;
+  --o: #c8372d;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  background-color: var(--paper);
+  background-image:
+    linear-gradient(var(--grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+  background-size: 28px 28px;
+  color: var(--text);
+  font-family: "Caveat", "Segoe Print", "Bradley Hand", cursive;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+main {
+  width: min(92vw, 420px);
+  text-align: center;
+  background: var(--paper);
+  padding: 20px 20px 24px;
+  border: 2px solid var(--text);
+  border-radius: 6px 10px 7px 12px;
+}
+h1 { font-size: 2.6rem; margin: 0 0 4px; font-weight: 700; }
+#status { font-size: 1.7rem; min-height: 2.2rem; margin: 0 0 8px; }
+#status.x { color: var(--x); }
+#status.o { color: var(--o); }
+.modes { display: flex; gap: 8px; justify-content: center; margin-bottom: 10px; }
+button {
+  font: inherit;
+  font-size: 1.3rem;
+  color: var(--text);
+  background: transparent;
+  border: 2px solid var(--text);
+  border-radius: 8px 4px 9px 5px;
+  padding: 2px 14px;
+  cursor: pointer;
+}
+button[aria-pressed="true"] { background: var(--text); color: var(--paper); }
+button:focus-visible, .cell:focus-visible { outline: 3px solid var(--o); outline-offset: 2px; }
+#board-wrap { position: relative; width: 100%; aspect-ratio: 1; margin: 6px 0 12px; }
+#board {
+  position: absolute; inset: 0;
+  display: grid; grid-template: repeat(3, 1fr) / repeat(3, 1fr);
+}
+.cell { background: none; border: 0; padding: 0; border-radius: 0; position: relative; }
+.cell svg { width: 100%; height: 100%; display: block; }
+.mark path, .mark circle, .mark ellipse {
+  fill: none; stroke-width: 9; stroke-linecap: round;
+  stroke-dasharray: 1; stroke-dashoffset: 1;
+  animation: draw .35s ease-out forwards;
+}
+.mark.x path { stroke: var(--x); }
+.mark.o ellipse { stroke: var(--o); }
+@keyframes draw { to { stroke-dashoffset: 0; } }
+#lines { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+#lines line { stroke: var(--text); stroke-width: 2.5; stroke-linecap: round; }
+#strike {
+  stroke: var(--text); stroke-width: 6; stroke-linecap: round; opacity: .85;
+  stroke-dasharray: 1; stroke-dashoffset: 1;
+  animation: draw .45s ease-out forwards;
+}
+.score { display: flex; justify-content: space-around; font-size: 1.6rem; margin-bottom: 10px; }
+.score .x { color: var(--x); } .score .o { color: var(--o); }
+@media (prefers-reduced-motion: reduce) {
+  .mark path, .mark ellipse, #strike { animation: none; stroke-dashoffset: 0; }
+}
+</style>
+</head>
+<body>
+<main>
+  <h1>Tic Tac Toe</h1>
+  <p id="status" class="x" aria-live="polite"></p>
+  <div class="modes">
+    <button id="m2" aria-pressed="false">Two players</button>
+    <button id="m1" aria-pressed="true">Vs computer</button>
+  </div>
+  <div id="board-wrap">
+    <svg id="lines" viewBox="0 0 300 300" aria-hidden="true">
+      <line x1="100" y1="12" x2="100" y2="288"/>
+      <line x1="200" y1="12" x2="200" y2="288"/>
+      <line x1="12" y1="100" x2="288" y2="100"/>
+      <line x1="12" y1="200" x2="288" y2="200"/>
+      <line id="strike" x1="0" y1="0" x2="0" y2="0" pathLength="1" style="display:none"/>
+    </svg>
+    <div id="board"></div>
+  </div>
+  <div class="score">
+    <span class="x">X: <b id="sx">0</b></span>
+    <span>Draws: <b id="sd">0</b></span>
+    <span class="o">O: <b id="so">0</b></span>
+  </div>
+  <button id="again">New game</button>
+</main>
+
+<script>
+const WINS = [[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]];
+const boardEl = document.getElementById('board');
+const statusEl = document.getElementById('status');
+const strike = document.getElementById('strike');
+const score = { X: 0, O: 0, D: 0 };
+let board, turn, over, vsComputer = true, startPlayer = 'X';
+
+const XMARK = '<svg class="mark x" viewBox="0 0 100 100"><path pathLength="1" d="M24 24 L77 78"/><path pathLength="1" style="animation-delay:.15s" d="M77 22 L23 77"/></svg>';
+const OMARK = '<svg class="mark o" viewBox="0 0 100 100"><ellipse pathLength="1" cx="50" cy="50" rx="27" ry="29"/></svg>';
+
+for (let i = 0; i < 9; i++) {
+  const b = document.createElement('button');
+  b.className = 'cell';
+  b.setAttribute('aria-label', 'Square ' + (i + 1));
+  b.addEventListener('click', () => play(i));
+  boardEl.appendChild(b);
+}
+
+function winnerOf(b) {
+  for (const l of WINS) if (b[l[0]] && b[l[0]] === b[l[1]] && b[l[0]] === b[l[2]]) return { p: b[l[0]], line: l };
+  return b.every(Boolean) ? { p: 'D' } : null;
+}
+
+function setStatus(text, who) {
+  statusEl.textContent = text;
+  statusEl.className = who ? who.toLowerCase() : '';
+}
+
+function newGame() {
+  board = Array(9).fill(null);
+  over = false;
+  turn = startPlayer;
+  strike.style.display = 'none';
+  [...boardEl.children].forEach(c => { c.innerHTML = ''; c.disabled = false; });
+  setStatus(turn + "'s turn", turn);
+  if (vsComputer && turn === 'O') setTimeout(computerMove, 450);
+}
+
+function play(i) {
+  if (over || board[i] || (vsComputer && turn === 'O')) return;
+  place(i);
+}
+
+function place(i) {
+  board[i] = turn;
+  const cell = boardEl.children[i];
+  cell.innerHTML = turn === 'X' ? XMARK : OMARK;
+  cell.disabled = true;
+  const res = winnerOf(board);
+  if (res) return finish(res);
+  turn = turn === 'X' ? 'O' : 'X';
+  setStatus(turn + "'s turn", turn);
+  if (vsComputer && turn === 'O') setTimeout(computerMove, 450);
+}
+
+function finish(res) {
+  over = true;
+  score[res.p]++;
+  document.getElementById('sx').textContent = score.X;
+  document.getElementById('so').textContent = score.O;
+  document.getElementById('sd').textContent = score.D;
+  [...boardEl.children].forEach(c => c.disabled = true);
+  if (res.p === 'D') return setStatus("It's a draw", null);
+  const c = i => [(i % 3) * 100 + 50, Math.floor(i / 3) * 100 + 50];
+  const [a, , z] = res.line;
+  const [x1, y1] = c(a), [x2, y2] = c(z);
+  strike.setAttribute('x1', x1); strike.setAttribute('y1', y1);
+  strike.setAttribute('x2', x2); strike.setAttribute('y2', y2);
+  strike.style.display = '';
+  strike.style.animation = 'none'; void strike.getBoundingClientRect(); strike.style.animation = '';
+  setStatus(res.p + ' wins!', res.p);
+  startPlayer = res.p === 'D' ? startPlayer : (res.p === 'X' ? 'O' : 'X');
+}
+
+/* Computer plays O using minimax, so it never loses. */
+function minimax(b, player) {
+  const r = winnerOf(b);
+  if (r) return r.p === 'O' ? 1 : r.p === 'X' ? -1 : 0;
+  const scores = [];
+  b.forEach((v, i) => {
+    if (v) return;
+    b[i] = player;
+    scores.push(minimax(b, player === 'O' ? 'X' : 'O'));
+    b[i] = null;
+  });
+  return player === 'O' ? Math.max(...scores) : Math.min(...scores);
+}
+
+function computerMove() {
+  if (over) return;
+  let best = -2, move = -1;
+  board.forEach((v, i) => {
+    if (v) return;
+    board[i] = 'O';
+    const s = minimax(board, 'X');
+    board[i] = null;
+    if (s > best) { best = s; move = i; }
+  });
+  place(move);
+}
+
+function setMode(one) {
+  vsComputer = one;
+  document.getElementById('m1').setAttribute('aria-pressed', one);
+  document.getElementById('m2').setAttribute('aria-pressed', !one);
+  score.X = score.O = score.D = 0;
+  ['sx', 'so', 'sd'].forEach(id => document.getElementById(id).textContent = 0);
+  startPlayer = 'X';
+  newGame();
+}
+
+document.getElementById('m1').addEventListener('click', () => setMode(true));
+document.getElementById('m2').addEventListener('click', () => setMode(false));
+document.getElementById('again').addEventListener('click', newGame);
+newGame();
+</script>
+</body>
+</html>
