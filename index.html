@@ -53,7 +53,17 @@ button {
   cursor: pointer;
 }
 button[aria-pressed="true"] { background: var(--text); color: var(--paper); }
-button:focus-visible, .cell:focus-visible { outline: 3px solid var(--o); outline-offset: 2px; }
+[hidden] { display: none !important; }
+.modes { flex-wrap: wrap; }
+#online { margin: 0 0 10px; font-size: 1.3rem; }
+#online p { margin: 6px 0; }
+input {
+  font: inherit; font-size: 1.2rem; color: var(--text); background: transparent;
+  border: 2px solid var(--text); border-radius: 5px 8px 4px 7px; padding: 1px 8px;
+  width: 100%; max-width: 240px; text-transform: uppercase;
+}
+#link { text-transform: none; max-width: 100%; font-size: 1rem; margin-bottom: 4px; }
+input:focus-visible, button:focus-visible, .cell:focus-visible { outline: 3px solid var(--o); outline-offset: 2px; }
 #board-wrap { position: relative; width: 100%; aspect-ratio: 1; margin: 6px 0 12px; }
 #board {
   position: absolute; inset: 0;
@@ -90,6 +100,13 @@ button:focus-visible, .cell:focus-visible { outline: 3px solid var(--o); outline
   <div class="modes">
     <button id="m2" aria-pressed="false">Two players</button>
     <button id="m1" aria-pressed="true">Vs computer</button>
+    <button id="m3" aria-pressed="false">Play online</button>
+  </div>
+  <div id="online" hidden>
+    <p><button id="create">Create a game</button></p>
+    <p id="share" hidden>Send this link to your friend:<br>
+      <input id="link" readonly> <button id="copy">Copy</button></p>
+    <p>Or enter a code: <input id="code" maxlength="5" placeholder="ABCDE"> <button id="join">Join</button></p>
   </div>
   <div id="board-wrap">
     <svg id="lines" viewBox="0 0 300 300" aria-hidden="true">
@@ -109,6 +126,7 @@ button:focus-visible, .cell:focus-visible { outline: 3px solid var(--o); outline
   <button id="again">New game</button>
 </main>
 
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script>
 const WINS = [[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]];
 const boardEl = document.getElementById('board');
@@ -116,6 +134,7 @@ const statusEl = document.getElementById('status');
 const strike = document.getElementById('strike');
 const score = { X: 0, O: 0, D: 0 };
 let board, turn, over, vsComputer = true, startPlayer = 'X';
+let online = false, myMark = null, peer = null, conn = null;
 
 const XMARK = '<svg class="mark x" viewBox="0 0 100 100"><path pathLength="1" d="M24 24 L77 78"/><path pathLength="1" style="animation-delay:.15s" d="M77 22 L23 77"/></svg>';
 const OMARK = '<svg class="mark o" viewBox="0 0 100 100"><ellipse pathLength="1" cx="50" cy="50" rx="27" ry="29"/></svg>';
@@ -138,18 +157,27 @@ function setStatus(text, who) {
   statusEl.className = who ? who.toLowerCase() : '';
 }
 
+function turnText() {
+  if (!online) return turn + "'s turn";
+  return turn === myMark ? 'Your turn (' + turn + ')' : 'Waiting for ' + turn + '...';
+}
+
 function newGame() {
   board = Array(9).fill(null);
   over = false;
   turn = startPlayer;
   strike.style.display = 'none';
   [...boardEl.children].forEach(c => { c.innerHTML = ''; c.disabled = false; });
-  setStatus(turn + "'s turn", turn);
+  setStatus(turnText(), turn);
   if (vsComputer && turn === 'O') setTimeout(computerMove, 450);
 }
 
 function play(i) {
   if (over || board[i] || (vsComputer && turn === 'O')) return;
+  if (online) {
+    if (turn !== myMark || !conn) return;
+    conn.send({ t: 'move', i });
+  }
   place(i);
 }
 
@@ -161,7 +189,7 @@ function place(i) {
   const res = winnerOf(board);
   if (res) return finish(res);
   turn = turn === 'X' ? 'O' : 'X';
-  setStatus(turn + "'s turn", turn);
+  setStatus(turnText(), turn);
   if (vsComputer && turn === 'O') setTimeout(computerMove, 450);
 }
 
@@ -180,7 +208,7 @@ function finish(res) {
   strike.setAttribute('x2', x2); strike.setAttribute('y2', y2);
   strike.style.display = '';
   strike.style.animation = 'none'; void strike.getBoundingClientRect(); strike.style.animation = '';
-  setStatus(res.p + ' wins!', res.p);
+  setStatus(online ? (res.p === myMark ? 'You win!' : 'Your friend wins!') : res.p + ' wins!', res.p);
   startPlayer = res.p === 'D' ? startPlayer : (res.p === 'X' ? 'O' : 'X');
 }
 
@@ -211,20 +239,117 @@ function computerMove() {
   place(move);
 }
 
-function setMode(one) {
-  vsComputer = one;
-  document.getElementById('m1').setAttribute('aria-pressed', one);
-  document.getElementById('m2').setAttribute('aria-pressed', !one);
+function resetScores() {
   score.X = score.O = score.D = 0;
   ['sx', 'so', 'sd'].forEach(id => document.getElementById(id).textContent = 0);
-  startPlayer = 'X';
-  newGame();
 }
 
-document.getElementById('m1').addEventListener('click', () => setMode(true));
-document.getElementById('m2').addEventListener('click', () => setMode(false));
-document.getElementById('again').addEventListener('click', newGame);
+function leaveOnline() {
+  if (conn) { conn.close(); conn = null; }
+  if (peer) { peer.destroy(); peer = null; }
+  online = false; myMark = null;
+  document.getElementById('online').hidden = true;
+  document.getElementById('share').hidden = true;
+}
+
+function setMode(mode) {
+  leaveOnline();
+  vsComputer = mode === 'ai';
+  online = mode === 'online';
+  document.getElementById('m1').setAttribute('aria-pressed', mode === 'ai');
+  document.getElementById('m2').setAttribute('aria-pressed', mode === 'local');
+  document.getElementById('m3').setAttribute('aria-pressed', online);
+  resetScores();
+  startPlayer = 'X';
+  newGame();
+  if (online) {
+    over = true;
+    [...boardEl.children].forEach(c => c.disabled = true);
+    document.getElementById('online').hidden = false;
+    setStatus('Create a game or join with a code', null);
+  }
+}
+
+/* ---------- Online play (PeerJS: browsers connect directly) ---------- */
+function wire() {
+  conn.on('open', () => {
+    document.getElementById('online').hidden = true;
+    resetScores();
+    startPlayer = 'X';
+    newGame();
+  });
+  conn.on('data', d => {
+    if (d.t === 'move' && !over && !board[d.i] && turn !== myMark) place(d.i);
+    if (d.t === 'new') newGame();
+  });
+  conn.on('close', () => {
+    over = true;
+    [...boardEl.children].forEach(c => c.disabled = true);
+    setStatus('Your friend left the game', null);
+  });
+}
+
+function createGame() {
+  if (peer) peer.destroy();
+  conn = null;
+  const code = Math.random().toString(36).slice(2, 7).toUpperCase();
+  peer = new Peer('ttt-' + code);
+  peer.on('open', () => {
+    myMark = 'X';
+    document.getElementById('link').value = location.origin + location.pathname + '?room=' + code;
+    document.getElementById('share').hidden = false;
+    setStatus('Waiting for your friend to join...', null);
+  });
+  peer.on('connection', c => {
+    if (conn) { c.close(); return; }
+    conn = c;
+    wire();
+  });
+  peer.on('error', e => {
+    if (e.type === 'unavailable-id') createGame();
+    else setStatus('Connection problem. Please try again.', null);
+  });
+}
+
+function joinGame(code) {
+  code = code.trim().toUpperCase();
+  if (!code) return;
+  if (peer) peer.destroy();
+  conn = null;
+  setStatus('Joining...', null);
+  peer = new Peer();
+  peer.on('open', () => {
+    myMark = 'O';
+    conn = peer.connect('ttt-' + code, { reliable: true });
+    wire();
+  });
+  peer.on('error', e => {
+    setStatus(e.type === 'peer-unavailable' ? 'No game found with that code' : 'Connection problem. Please try again.', null);
+  });
+}
+
+document.getElementById('m1').addEventListener('click', () => setMode('ai'));
+document.getElementById('m2').addEventListener('click', () => setMode('local'));
+document.getElementById('m3').addEventListener('click', () => setMode('online'));
+document.getElementById('create').addEventListener('click', createGame);
+document.getElementById('join').addEventListener('click', () => joinGame(document.getElementById('code').value));
+document.getElementById('copy').addEventListener('click', () => {
+  const l = document.getElementById('link');
+  l.select();
+  if (navigator.clipboard) navigator.clipboard.writeText(l.value);
+  document.getElementById('copy').textContent = 'Copied';
+});
+document.getElementById('again').addEventListener('click', () => {
+  if (online) {
+    if (!conn) return;
+    conn.send({ t: 'new' });
+  }
+  newGame();
+});
+
 newGame();
+const room = new URLSearchParams(location.search).get('room');
+if (room) { setMode('online'); joinGame(room); }
 </script>
 </body>
 </html>
